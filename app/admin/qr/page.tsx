@@ -1,0 +1,354 @@
+"use client";
+
+import { useState } from "react";
+import {
+  QrCode, ShieldCheck, KeyRound, Fingerprint, Hash, Download,
+  Printer, RefreshCw, Copy, CheckCircle2, AlertTriangle, Info,
+  Lock, Zap, Database,
+} from "lucide-react";
+
+// ─── Tokens ───────────────────────────────────────────────────────────────────
+const C = {
+  primaryDark: "#0f172a",
+  primary:     "#16a34a",
+  outerGreen:  "#475569",
+  surface:     "#f8fafc",
+  surface2:    "#f1f5f9",
+  border:      "#e2e8f0",
+  amber:       "#d97706",
+  amberBg:     "#fffbeb",
+  amberBorder: "#fde68a",
+};
+
+type QRMode = "uuid" | "encrypted" | "signed";
+
+const MODES = [
+  {
+    key:        "uuid" as QRMode,
+    label:      "Secure UUID",
+    icon:       Hash,
+    tagline:    "Simplest setup — best for fully internal, trusted networks.",
+    badge:      "Low complexity",
+    badgeBg:    C.surface2,
+    badgeColor: C.outerGreen,
+    points: [
+      "Generate a random, non-guessable UUID stored alongside the employee record.",
+      "On each scan, the UUID is looked up in your database to retrieve the employee.",
+      "Ideal when scans happen only on your internal network with trusted devices.",
+    ],
+    code: "550e8400-e29b-41d4-a716-446655440000",
+  },
+  {
+    key:        "encrypted" as QRMode,
+    label:      "Encrypted Token",
+    icon:       Lock,
+    tagline:    "Strong protection — recommended for most deployments.",
+    badge:      "Recommended",
+    badgeBg:    "#ecfdf5",
+    badgeColor: "#16a34a",
+    points: [
+      "Encrypt employeeId + expiry + nonce with a secret key on your backend.",
+      "QR contains only the encrypted blob — decrypt and validate expiry on each scan.",
+      "Strong protection against token sharing when combined with short expiry and IP checks.",
+    ],
+    code: "eyJ0IjoiZW1wbC0wMDEiLCJleHAiOjE3NDc2OTAwMDB9.sig",
+  },
+  {
+    key:        "signed" as QRMode,
+    label:      "Signed JWT",
+    icon:       Fingerprint,
+    tagline:    "High performance — no DB lookup needed on every scan.",
+    badge:      "Advanced",
+    badgeBg:    "#fffbeb",
+    badgeColor: "#d97706",
+    points: [
+      "Sign a payload with employeeId, iat, and exp using HMAC-SHA256 or RS256.",
+      "Scanner validates the signature and expiry without a database round-trip.",
+      "Good balance of performance and security — no personal data is exposed.",
+    ],
+    code: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJFTVAtMDAxIn0.xRzd",
+  },
+];
+
+const CHECKLIST = (mode: QRMode) => [
+  { icon: Lock,          label: "Token expiry enforced",  ok: true },
+  { icon: Database,      label: "DB lookup on scan",      ok: mode !== "signed" },
+  { icon: Zap,           label: "Scanless verification",  ok: mode === "signed" },
+  { icon: AlertTriangle, label: "Revocable tokens",       ok: mode !== "signed" },
+];
+
+// ─── QR SVG ───────────────────────────────────────────────────────────────────
+function FakeQR({ color }: { color: string }) {
+  const pattern = [
+    [1,1,1,1,1,1,1,0,1,0,0,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,1],
+    [1,0,1,1,1,0,1,0,1,0,1,0,1,0,1,1,1,0,1],
+    [1,0,1,1,1,0,1,0,0,1,1,0,1,0,1,1,1,0,1],
+    [1,0,1,1,1,0,1,0,1,0,0,1,1,0,1,1,1,0,1],
+    [1,0,0,0,0,0,1,0,0,0,1,0,1,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,0,1,0,1,0,1,1,1,1,1,1,1],
+    [0,0,0,0,0,0,0,0,1,1,0,1,0,0,0,0,0,0,0],
+    [1,0,1,1,0,1,1,1,0,0,1,1,1,0,1,1,0,1,0],
+    [0,1,0,0,1,0,0,1,1,0,0,1,0,1,0,0,1,0,1],
+    [1,1,0,1,0,1,1,0,1,1,0,0,1,1,0,1,0,1,0],
+    [0,0,0,0,0,0,0,0,1,0,1,1,0,1,1,0,0,1,0],
+    [1,1,1,1,1,1,1,0,0,1,0,0,1,0,1,0,1,0,1],
+    [1,0,0,0,0,0,1,0,1,1,1,0,0,1,0,1,0,1,0],
+    [1,0,1,1,1,0,1,0,1,0,0,1,1,0,1,1,1,0,1],
+    [1,0,1,1,1,0,1,0,0,1,0,1,0,1,0,0,0,1,0],
+    [1,0,1,1,1,0,1,0,1,0,1,0,1,0,1,0,1,1,0],
+    [1,0,0,0,0,0,1,0,0,1,1,0,0,1,0,1,0,0,1],
+    [1,1,1,1,1,1,1,0,1,0,0,1,1,0,1,0,1,0,0],
+  ];
+  const cell = 8, size = pattern.length * cell;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {pattern.map((row, r) => row.map((bit, c) =>
+        bit ? <rect key={`${r}-${c}`} x={c*cell} y={r*cell} width={cell} height={cell} fill={color} rx={1.5} /> : null
+      ))}
+    </svg>
+  );
+}
+
+// ─── Regenerate Confirm Modal ─────────────────────────────────────────────────
+function RegenModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: () => void }) {
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:1000, background:"rgba(15,23,42,0.5)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:18, padding:28, width:320, boxShadow:"0 20px 60px rgba(0,0,0,0.15)", textAlign:"center" }}>
+        <div style={{ width:44, height:44, borderRadius:12, background:C.amberBg, border:`1px solid ${C.amberBorder}`, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px" }}>
+          <RefreshCw size={18} color={C.amber} />
+        </div>
+        <div style={{ fontWeight:800, fontSize:14, color:C.primaryDark, marginBottom:8 }}>Regenerate Token?</div>
+        <div style={{ fontSize:12, color:C.outerGreen, marginBottom:22, lineHeight:1.6 }}>
+          This will revoke the current QR code. Any <strong>printed tags</strong> with the old QR will stop working immediately.
+        </div>
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={onClose} style={{ flex:1, padding:"9px", borderRadius:9, border:`1px solid ${C.border}`, background:"#fff", color:C.primaryDark, fontSize:12, fontWeight:600, cursor:"pointer" }}>Cancel</button>
+          <button onClick={onConfirm} style={{ flex:1, padding:"9px", borderRadius:9, border:"none", background:C.amber, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>Regenerate</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+export default function QrManagementPage() {
+  const [mode, setMode]         = useState<QRMode>("encrypted");
+  const [copied, setCopied]     = useState(false);
+  const [showRegen, setShowRegen] = useState(false);
+  const [regenerated, setRegenerated] = useState(false);
+
+  const active = MODES.find(m => m.key === mode)!;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(active.code).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRegen = () => {
+    setRegenerated(true);
+    setShowRegen(false);
+    setTimeout(() => setRegenerated(false), 3000);
+  };
+
+  const btnBase: React.CSSProperties = {
+    display:"flex", alignItems:"center", justifyContent:"center", gap:7,
+    padding:"9px 14px", borderRadius:9, cursor:"pointer", fontSize:12, fontWeight:600, border:`1px solid ${C.border}`,
+  };
+
+  return (
+    <>
+      <style>{`@keyframes fadeUp { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:none } }`}</style>
+
+      {showRegen && <RegenModal onClose={() => setShowRegen(false)} onConfirm={handleRegen} />}
+
+      <div style={{ display:"flex", flexDirection:"column", gap:22 }}>
+
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:14 }}>
+          <div>
+            <div style={{ display:"flex", alignItems:"center", gap:9, marginBottom:6 }}>
+              <div style={{ width:34, height:34, borderRadius:9, background:C.surface2, border:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                <QrCode size={16} color={C.primary} />
+              </div>
+              <h1 style={{ fontSize:22, fontWeight:800, color:C.primaryDark, margin:0, letterSpacing:"-0.03em" }}>QR Code Management</h1>
+            </div>
+            <p style={{ fontSize:12, color:C.outerGreen, margin:0 }}>
+              Configure payload strategy, preview codes, and manage token security for employee QR tags.
+            </p>
+          </div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <span style={{ display:"flex", alignItems:"center", gap:5, background:"#ecfdf5", border:"1px solid #a7f3d0", borderRadius:100, padding:"5px 12px", fontSize:11, fontWeight:600, color:C.primary }}>
+              <ShieldCheck size={11} /> No raw personal data in QR
+            </span>
+            <span style={{ display:"flex", alignItems:"center", gap:5, background:C.amberBg, border:`1px solid ${C.amberBorder}`, borderRadius:100, padding:"5px 12px", fontSize:11, fontWeight:600, color:C.amber }}>
+              <KeyRound size={11} /> JWT / token signing ready
+            </span>
+          </div>
+        </div>
+
+        {/* Main grid */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 340px", gap:16, alignItems:"start" }}>
+
+          {/* Left: strategy */}
+          <div style={{ background:"#fff", borderRadius:16, border:`1px solid ${C.border}`, overflow:"hidden" }}>
+            <div style={{ padding:"18px 20px", borderBottom:`1px solid ${C.surface2}` }}>
+              <div style={{ fontWeight:700, fontSize:14, color:C.primaryDark }}>QR Payload Strategy</div>
+              <div style={{ fontSize:11, color:C.outerGreen, marginTop:3 }}>Employee details stay in your database — only a token or ID is embedded in the QR.</div>
+            </div>
+
+            <div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:18 }}>
+
+              {/* Mode cards */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
+                {MODES.map(m => {
+                  const Icon = m.icon;
+                  const active = mode === m.key;
+                  return (
+                    <button
+                      key={m.key}
+                      onClick={() => setMode(m.key)}
+                      style={{
+                        display:"flex", flexDirection:"column", alignItems:"flex-start", gap:10,
+                        padding:"14px", borderRadius:12, cursor:"pointer", textAlign:"left",
+                        border:`2px solid ${active ? C.primary : C.border}`,
+                        background: active ? "#ecfdf5" : "#fff",
+                        transition:"all 0.15s",
+                      }}
+                    >
+                      <div style={{ width:34, height:34, borderRadius:9, background: active ? C.primary : C.surface2, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                        <Icon size={15} color={active ? "#fff" : C.outerGreen} strokeWidth={2} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize:12, fontWeight:700, color:C.primaryDark }}>{m.label}</div>
+                        <div style={{ fontSize:10, color:C.outerGreen, marginTop:3, lineHeight:1.4 }}>{m.tagline}</div>
+                      </div>
+                      <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", padding:"3px 9px", borderRadius:100, background: active ? "rgba(22,163,74,0.1)" : m.badgeBg, color: active ? C.primary : m.badgeColor, border:`1px solid ${active ? "rgba(22,163,74,0.25)" : "transparent"}` }}>
+                        {m.badge}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Detail box */}
+              <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, padding:"16px 18px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+                  <active.icon size={14} color={C.primary} />
+                  <span style={{ fontSize:13, fontWeight:700, color:C.primaryDark }}>{active.label}</span>
+                  <span style={{ marginLeft:"auto", fontSize:9, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", padding:"3px 10px", borderRadius:100, background:active.badgeBg, color:active.badgeColor }}>{active.badge}</span>
+                </div>
+                <ul style={{ listStyle:"none", padding:0, margin:0, display:"flex", flexDirection:"column", gap:10, fontSize:12 }}>
+                  {active.points.map((p, i) => (
+                    <li key={i} style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
+                      <CheckCircle2 size={13} color={C.primary} style={{ flexShrink:0, marginTop:1 }} />
+                      <span style={{ color:C.primaryDark, lineHeight:1.6 }}>{p}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Integration note */}
+              <div style={{ borderRadius:12, padding:"14px 16px", border:`1.5px dashed #86efac`, background:"#f0fdf4", display:"flex", gap:10 }}>
+                <Info size={14} color={C.primary} style={{ flexShrink:0, marginTop:1 }} />
+                <div>
+                  <div style={{ fontSize:12, fontWeight:700, color:C.primaryDark, marginBottom:4 }}>Backend Integration Note</div>
+                  <p style={{ fontSize:11, color:C.outerGreen, margin:0, lineHeight:1.6 }}>
+                    When a new employee is created, call your backend to generate a secure token and store it alongside the employee record.
+                    The QR image printed on the employee&#39;s tag must contain <strong style={{ color:C.primaryDark }}>only that token</strong> — never name, email, or phone number directly.
+                  </p>
+                </div>
+              </div>
+
+              {/* Security checklist */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
+                {CHECKLIST(mode).map(item => (
+                  <div key={item.label} style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", borderRadius:9, background: item.ok ? "#ecfdf5" : C.surface2, border:`1px solid ${item.ok ? "rgba(22,163,74,0.2)" : C.border}` }}>
+                    <item.icon size={12} color={item.ok ? C.primary : C.outerGreen} />
+                    <span style={{ fontSize:11, fontWeight:500, color: item.ok ? C.primaryDark : C.outerGreen }}>{item.label}</span>
+                    {item.ok
+                      ? <CheckCircle2 size={12} color={C.primary} style={{ marginLeft:"auto" }} />
+                      : <span style={{ marginLeft:"auto", fontSize:9, color:C.outerGreen }}>N/A</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Right: QR preview */}
+          <div style={{ background:"#fff", borderRadius:16, border:`1px solid ${C.border}`, overflow:"hidden" }}>
+            <div style={{ padding:"18px 20px", borderBottom:`1px solid ${C.surface2}` }}>
+              <div style={{ fontWeight:700, fontSize:14, color:C.primaryDark }}>Sample QR Preview</div>
+              <div style={{ fontSize:11, color:C.outerGreen, marginTop:3 }}>Print or download onto the employee&#39;s physical ID tag.</div>
+            </div>
+
+            <div style={{ padding:"20px", display:"flex", flexDirection:"column", gap:14 }}>
+
+              {/* QR graphic */}
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:14, padding:"20px 16px", borderRadius:12, background:C.surface, border:`1px solid ${C.border}` }}>
+                {/* Employee chip */}
+                <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 14px", borderRadius:100, background:C.primaryDark }}>
+                  <div style={{ width:22, height:22, borderRadius:6, background:"#eab308", color:C.primaryDark, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:800 }}>JD</div>
+                  <span style={{ fontSize:11, fontWeight:600, color:"#fff" }}>John Doe</span>
+                  <span style={{ fontSize:10, color:"rgba(255,255,255,0.45)" }}>EMP-001</span>
+                </div>
+
+                {/* QR */}
+                <div style={{ background:"#fff", padding:12, borderRadius:10, border:`1.5px solid ${C.border}`, boxShadow:"0 2px 12px rgba(0,0,0,0.08)" }}>
+                  <FakeQR color={C.primaryDark} />
+                </div>
+
+                <span style={{ fontSize:10, color:C.outerGreen }}>
+                  Strategy: <strong style={{ color:C.primaryDark }}>{active.label}</strong>
+                </span>
+              </div>
+
+              {/* Regenerated toast */}
+              {regenerated && (
+                <div style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", borderRadius:9, background:"#ecfdf5", border:"1px solid rgba(22,163,74,0.2)", animation:"fadeUp 0.2s ease" }}>
+                  <CheckCircle2 size={13} color={C.primary} />
+                  <span style={{ fontSize:11, fontWeight:600, color:C.primary }}>Token regenerated successfully</span>
+                </div>
+              )}
+
+              {/* Token */}
+              <div style={{ borderRadius:10, background:C.primaryDark, padding:"10px 12px", display:"flex", alignItems:"center", gap:8 }}>
+                <code style={{ fontSize:10, color:"#86efac", fontFamily:"monospace", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
+                  {active.code}
+                </code>
+                <button onClick={handleCopy} style={{ background:"none", border:"none", cursor:"pointer", color: copied ? "#eab308" : "rgba(255,255,255,0.35)", flexShrink:0, padding:4, transition:"color 0.2s" }}>
+                  {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                </button>
+              </div>
+
+              {/* Buttons */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <button style={{ ...btnBase, background:"#fff", color:C.primaryDark }}>
+                  <Download size={13} /> Download
+                </button>
+                <button style={{ ...btnBase, background:"#fff", color:C.primaryDark }}>
+                  <Printer size={13} /> Print
+                </button>
+                <button
+                  onClick={() => setShowRegen(true)}
+                  style={{ ...btnBase, gridColumn:"1/-1", border:`1px solid ${C.amberBorder}`, background:C.amberBg, color:C.amber, fontWeight:700 }}
+                >
+                  <RefreshCw size={13} /> Regenerate Token
+                </button>
+              </div>
+
+              {/* Warning */}
+              <div style={{ display:"flex", gap:8, padding:"10px 12px", borderRadius:9, background:C.amberBg, border:`1px solid ${C.amberBorder}` }}>
+                <AlertTriangle size={13} color={C.amber} style={{ flexShrink:0, marginTop:1 }} />
+                <span style={{ fontSize:11, color:C.amber, lineHeight:1.5 }}>
+                  Regenerating revokes the old token — printed QR tags will stop working immediately.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
